@@ -860,7 +860,8 @@ item_list_view_create (gboolean wide)
 	if (wide) {
 		gtk_tree_view_column_set_sort_column_id (headline_column, IS_TIME);
 		g_object_set (renderer, "wrap-mode", PANGO_WRAP_WORD, NULL);
-		g_object_set (renderer, "wrap-width", 300, NULL);
+		// seflerZ
+		g_object_set (renderer, "wrap-width", 200, NULL);
 	} else {
 		gtk_tree_view_column_set_sort_column_id (headline_column, IS_LABEL);
 		g_object_set (renderer, "ellipsize", PANGO_ELLIPSIZE_END, NULL);
