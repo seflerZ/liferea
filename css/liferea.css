@@ -47,7 +47,8 @@
 
 body {
 	background: #GTK-COLOR-BASE;
-	color: #GTK-COLOR-TEXT;
+	/* color: #GTK-COLOR-TEXT; */
+	color: #CCCCCC;
 	padding:0;
 	margin:0;
 }
@@ -117,7 +118,8 @@ table.itemhead, table.feedhead {
 	border:0;
 	border-bottom: 2px solid #GTK-COLOR-DARK;
 	clear:both;
-	color:#GTK-COLOR-TEXT;
+	/* color:#GTK-COLOR-TEXT; */
+	color #CCCCCC;
 }
 
 .itemhead, .feedhead {
@@ -126,7 +128,8 @@ table.itemhead, table.feedhead {
 
 table.itemhead * a.itemhead {
 	text-decoration:none;
-	color:#GTK-COLOR-TEXT;
+	/* color:#GTK-COLOR-TEXT; */
+	color: #CCCCCC;
 	font-weight:bold;
 }
 
@@ -269,5 +272,6 @@ div.photoheader {
 	padding-left:10px;
 	padding-right:10px;
 	background-color:#GTK-COLOR-DARK;
-	color:#GTK-COLOR-TEXT;
+	/* color:#GTK-COLOR-TEXT; */
+	color: #CCCCCC;
 }

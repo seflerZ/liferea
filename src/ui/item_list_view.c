@@ -488,7 +488,7 @@ item_list_view_update_item_internal (ItemListView *ilv, itemPtr item, GtkTreeIte
 		gchar *teaser = NULL; //item_get_teaser (item);
 		gchar *tmp = title;
 
-		title = g_strdup_printf ("<span weight='%s' size='large'>%s</span>%s<span weight='%s'>%s%s</span><span size='smaller' weight='ultralight'> (%s)</span>",
+		title = g_strdup_printf ("<span weight='%s'>%s</span>%s<span weight='%s'>%s%s</span><span size='smaller' weight='ultralight'> (%s)</span>",
 		                         "normal", //item->readStatus? SeflerZ
 		                         title,
 		                         item->flagStatus?important:"",
