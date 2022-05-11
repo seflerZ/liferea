@@ -49,8 +49,9 @@ body {
 	background: #GTK-COLOR-BASE;
 	/* color: #GTK-COLOR-TEXT; */
 	color: #CCCCCC;
+	line-height: 1.5em;
 	padding:0;
-	margin:0;
+	margin:0px 6px 0px 0px;
 }
 
 blockquote {
@@ -75,7 +76,7 @@ dd {
 }
 
 section, div.content svg, div.content * img {
-	max-width: 100%;
+	max-width: 100% !important;
 	height: auto !important;
 }
 
@@ -91,7 +92,7 @@ figure, iframe {
 
 div.content * img {
 	border:0;
-	margin:2px;
+	margin:0px;
 }
 
 div.content img.thumbnail {
