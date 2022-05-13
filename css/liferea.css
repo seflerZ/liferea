@@ -54,6 +54,10 @@ body {
 	margin:0px 6px 0px 0px;
 }
 
+h2,h3,h4 {
+	line-height: 1.8em;
+}
+
 blockquote {
         border-left: 3px solid #GTK-COLOR-DARK;
         background: #GTK-COLOR-BG;
