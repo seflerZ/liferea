@@ -224,7 +224,12 @@ vfolder_export (nodePtr node,
 void
 vfolder_reset (vfolderPtr vfolder)
 {
-	itemlist_unload (FALSE);
+	itemlist_unload ();
+
+	if (vfolder->loader) {
+		g_object_unref (vfolder->loader);
+		vfolder->loader = NULL;
+	}
 
 	g_list_free (vfolder->itemset->ids);
 	vfolder->itemset->ids = NULL;
@@ -237,7 +242,8 @@ vfolder_rebuild (nodePtr node)
 	vfolderPtr	vfolder = (vfolderPtr)node->data;
 
 	vfolder_reset (vfolder);
-	itemlist_add_search_result (vfolder_loader_new (node));
+	vfolder->loader = vfolder_loader_new (node);
+	itemlist_add_search_result (vfolder->loader);
 }
 
 static void
@@ -246,6 +252,11 @@ vfolder_free (nodePtr node)
 	vfolderPtr	vfolder = (vfolderPtr) node->data;
 
 	debug_enter ("vfolder_free");
+
+	if (vfolder->loader) {
+		g_object_unref (vfolder->loader);
+		vfolder->loader = NULL;
+	}
 
 	vfolders = g_slist_remove (vfolders, vfolder);
 	itemset_free (vfolder->itemset);
@@ -297,7 +308,7 @@ vfolder_get_node_type (void)
 		NODE_CAPABILITY_SHOW_UNREAD_COUNT |
 		NODE_CAPABILITY_EXPORT_ITEMS,
 		"vfolder",
-		NULL,
+		ICON_VFOLDER,
 		vfolder_import,
 		vfolder_export,
 		vfolder_load,
@@ -309,7 +320,6 @@ vfolder_get_node_type (void)
 		vfolder_properties,
 		vfolder_free
 	};
-	nti.icon = icon_get (ICON_VFOLDER);
 
 	return &nti;
 }

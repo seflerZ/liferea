@@ -2,7 +2,7 @@
  * @file preferences_dialog.c Liferea preferences
  *
  * Copyright (C) 2004-2006 Nathan J. Conrad <t98502@users.sourceforge.net>
- * Copyright (C) 2004-2018 Lars Windolf <lars.windolf@gmx.de>
+ * Copyright (C) 2004-2023 Lars Windolf <lars.windolf@gmx.de>
  * Copyright (C) 2009 Hubert Figuiere <hub@figuiere.net>
  *
  * This program is free software; you can redistribute it and/or modify
@@ -109,6 +109,7 @@ static const gchar * browser_skim_key_options[] = {
 static const gchar * default_view_mode_options[] = {
 	N_("Normal View"),
 	N_("Wide View"),
+	N_("Automatic"),
 	NULL
 };
 
@@ -175,7 +176,7 @@ on_folderhidereadbtn_toggled (GtkToggleButton *togglebutton, gpointer user_data)
 	conf_set_bool_value (FOLDER_DISPLAY_HIDE_READ, enabled);
 
 	if (displayedNode && IS_FOLDER (displayedNode)) {
-		itemlist_unload (FALSE);
+		itemlist_unload ();
 		itemlist_load (displayedNode);
 
 		/* Note: For simplicity when toggling this preference we
@@ -360,7 +361,10 @@ on_skim_key_changed (gpointer user_data)
 static void
 on_default_view_mode_changed (gpointer user_data)
 {
-	conf_set_int_value (DEFAULT_VIEW_MODE, gtk_combo_box_get_active (GTK_COMBO_BOX (user_data)));
+	gint 	mode = gtk_combo_box_get_active (GTK_COMBO_BOX (user_data));
+	
+	conf_set_int_value (DEFAULT_VIEW_MODE, mode);
+	itemview_set_layout (mode);
 }
 
 void

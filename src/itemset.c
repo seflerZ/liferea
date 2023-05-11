@@ -44,7 +44,7 @@ itemset_foreach (itemSetPtr itemSet, itemActionFunc callback, gpointer userdata)
 		itemPtr item = item_load (GPOINTER_TO_UINT (iter->data));
 		if (item) {
 			(*callback) (item, userdata);
-			item_unload (item);
+			g_object_unref (item);
 		}
 		iter = g_list_next (iter);
 	}
@@ -166,7 +166,11 @@ itemset_generic_merge_check (GList *items, itemPtr newItem, gint maxChecks, gboo
 				oldItem->description = newItem->description;
 				newItem->description = NULL;
 
-				oldItem->time = newItem->time;
+				/* Do not overwrite time when no valid time was provided by feed
+				   Otherwise we'd get an unintended newer timestamp here (see Github #1100) */
+				if (newItem->validTime)
+					oldItem->time = newItem->time;
+
 				oldItem->updateStatus = TRUE;
 				// FIXME: this does not remove metadata from DB
 				metadata_list_free (oldItem->metadata);
@@ -258,10 +262,12 @@ itemset_merge_item (itemSetPtr itemSet, GList *items, itemPtr item, gint maxChec
 			GSList *iter = metadata_list_get_values (item->metadata, "enclosure");
 			while (iter) {
 				enclosurePtr enc = enclosure_from_string (iter->data);
-				debug1 (DEBUG_UPDATE, "download enclosure (%s)", (gchar *)iter->data);
-				enclosure_download (NULL, enc->url, FALSE /* non interactive */);
+				if (enc) {
+					debug1 (DEBUG_UPDATE, "download enclosure (%s)", (gchar *)iter->data);
+					enclosure_download (NULL, enc->url, FALSE /* non interactive */);
+					enclosure_free (enc);
+				}
 				iter = g_slist_next (iter);
-				enclosure_free (enc);
 			}
 		}
 	} else {

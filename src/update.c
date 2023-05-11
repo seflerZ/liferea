@@ -234,6 +234,13 @@ update_request_set_auth_value (UpdateRequest *request, const gchar* authValue)
 	request->authValue = g_strdup (authValue);
 }
 
+void
+update_request_allow_commands (UpdateRequest *request, gboolean allowCommands)
+{
+	request->allowCommands = allowCommands;
+}
+
+
 /* update result object */
 
 updateResultPtr
@@ -372,35 +379,37 @@ update_exec_filter_cmd (updateJobPtr job)
 		return NULL;
 	}
 
-	file = fdopen (fd, "w");
-	fwrite (job->result->data, strlen (job->result->data), 1, file);
-	fclose (file);
+	if((file = fdopen (fd, "w"))) {
+		fwrite (job->result->data, strlen (job->result->data), 1, file);
+		fclose (file);
 
-	command = g_strdup_printf("%s < %s", job->request->filtercmd, tmpfilename);
-	p = popen (command, "r");
-	if (NULL != p) {
-		while (!feof (p) && !ferror (p)) {
-			size_t len;
-			out = g_realloc (out, size + 1025);
-			len = fread (&out[size], 1, 1024, p);
-			if (len > 0)
-				size += len;
+		command = g_strdup_printf("%s < %s", job->request->filtercmd, tmpfilename);
+		p = popen (command, "r");
+		if (NULL != p) {
+			while (!feof (p) && !ferror (p)) {
+				size_t len;
+				out = g_realloc (out, size + 1025);
+				len = fread (&out[size], 1, 1024, p);
+				if (len > 0)
+					size += len;
+			}
+			status = pclose (p);
+			if (!(WIFEXITED (status) && WEXITSTATUS (status) == 0)) {
+				debug2 (DEBUG_UPDATE, "%s exited with status %d!", command, WEXITSTATUS(status));
+				job->result->filterErrors = g_strdup_printf (_("%s exited with status %d"), command, WEXITSTATUS(status));
+				size = 0;
+			}
+			if (out)
+				out[size] = '\0';
+		} else {
+			job->result->filterErrors = g_strdup_printf (_("Error: Could not open pipe \"%s\""), command);
 		}
-		status = pclose (p);
-		if (!(WIFEXITED (status) && WEXITSTATUS (status) == 0)) {
-			debug2 (DEBUG_UPDATE, "%s exited with status %d!", command, WEXITSTATUS(status));
-			job->result->filterErrors = g_strdup_printf (_("%s exited with status %d"), command, WEXITSTATUS(status));
-			size = 0;
-		}
-		if (out)
-			out[size] = '\0';
+		g_free (command);
 	} else {
-		g_warning (_("Error: Could not open pipe \"%s\""), command);
-		job->result->filterErrors = g_strdup_printf (_("Error: Could not open pipe \"%s\""), command);
+		job->result->filterErrors = g_strdup (_("Error: Could not write temporary file!"));
 	}
 
 	/* Clean up. */
-	g_free (command);
 	unlink (tmpfilename);
 	g_free (tmpfilename);
 	return out;
@@ -493,8 +502,9 @@ update_exec_cmd_cb_child_watch (GPid pid, gint status, gpointer user_data)
 	job->cmd.pid = 0;
 	if (WIFEXITED (status) && WEXITSTATUS (status) == 0) {
 		job->result->httpstatus = 200;
-	} else {
-		job->result->httpstatus = 404;  /* FIXME: maybe setting request->returncode would be better */
+	} else if (job->result->httpstatus == 0) {
+		/* If there is no more specific error code. */
+		job->result->httpstatus = 500;  /* Internal server error. */
 	}
 
 	job->cmd.child_watch_id = 0;	/* Caller will remove source. */
@@ -581,9 +591,22 @@ update_exec_cmd_cb_timeout (gpointer user_data)
 	/* Kill child. Result will still be processed by update_exec_cmd_cb_child_watch */
 	kill((pid_t) job->cmd.pid, SIGKILL);
 	job->cmd.timeout_id = 0;
+	job->result->httpstatus = 504;	/* Gateway timeout */
 	return FALSE;	/* Remove timeout source */
 }
 
+static int
+get_exec_timeout_ms(void)
+{
+	const gchar	*val;
+	int	i;
+	if ((val = g_getenv("LIFEREA_FEED_CMD_TIMEOUT")) != NULL) {
+		if ((i = atoi(val)) > 0) {
+			return 1000*i;
+		}
+	}
+	return 60000; /* Default timeout */
+}
 
 static void
 update_exec_cmd (updateJobPtr job)
@@ -595,6 +618,7 @@ update_exec_cmd (updateJobPtr job)
 	 * on this behavior, so we run through a shell and keep compatibility. */
 	gchar		*cmd_args[] = { "/bin/sh", "-c", cmd, NULL };
 
+	job->result->httpstatus = 0;
 	debug1 (DEBUG_UPDATE, "executing command \"%s\"...", cmd);
 	ret = g_spawn_async_with_pipes (NULL, cmd_args, NULL,
 		G_SPAWN_DO_NOT_REAP_CHILD | G_SPAWN_STDERR_TO_DEV_NULL,
@@ -604,7 +628,7 @@ update_exec_cmd (updateJobPtr job)
 	if (!ret) {
 		debug0 (DEBUG_UPDATE, "g_spawn_async_with_pipes failed");
 		liferea_shell_set_status_bar (_("Error: Could not open pipe \"%s\""), cmd);
-		job->result->httpstatus = 404;	/* FIXME: maybe setting request->returncode would be better */
+		job->result->httpstatus = 404; /* Not found */
 		return;
 	}
 
@@ -614,8 +638,7 @@ update_exec_cmd (updateJobPtr job)
 	job->cmd.stdout_ch = g_io_channel_unix_new (job->cmd.fd);
 	job->cmd.io_watch_id = g_io_add_watch (job->cmd.stdout_ch, G_IO_IN | G_IO_HUP, (GIOFunc) update_exec_cmd_cb_out_watch, job);
 
-	/* FIXME: timeout should be configurable */
-	job->cmd.timeout_id = g_timeout_add (30000, (GSourceFunc) update_exec_cmd_cb_timeout, job);
+	job->cmd.timeout_id = g_timeout_add (get_exec_timeout_ms(), (GSourceFunc) update_exec_cmd_cb_timeout, job);
 }
 
 static void
@@ -658,8 +681,14 @@ update_job_run (updateJobPtr job)
 
 	/* everything starting with '|' is a local command */
 	if (*(job->request->source) == '|') {
-		debug1 (DEBUG_UPDATE, "Recognized local command: %s", job->request->source);
-		update_exec_cmd (job);
+		if (job->request->allowCommands) {
+			debug1 (DEBUG_UPDATE, "Recognized local command: %s", job->request->source);
+			update_exec_cmd (job);
+		} else {
+			debug1 (DEBUG_UPDATE, "Refusing to run local command from unexpected source: %s", job->request->source);
+			job->result->httpstatus = 403;  /* Forbidden. */
+			update_process_finished_job (job);
+		}
 		return;
 	}
 

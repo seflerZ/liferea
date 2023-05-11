@@ -42,7 +42,9 @@
 G_DEFINE_TYPE (LifereaWebKit, liferea_webkit, G_TYPE_OBJECT)
 
 // singleton
-LifereaWebKit *webkit = NULL;
+static LifereaWebKit *liferea_webkit = NULL;
+static WebKitUserStyleSheet *default_stylesheet = NULL;
+static WebKitUserStyleSheet *user_stylesheet = NULL;
 
 enum {
 	PAGE_CREATED_SIGNAL,
@@ -193,7 +195,7 @@ webkit_get_font (guint *size)
 			g_free (font);
 			font = NULL;
 		}
-		conf_get_default_font_from_schema (DEFAULT_FONT, &font);
+		conf_get_default_font (&font);
 	}
 
 	if (font) {
@@ -512,7 +514,6 @@ liferea_webkit_default_settings (WebKitSettings *settings)
 	g_object_set (settings, "enable-plugins", enable_plugins, NULL);
 
 	user_agent = network_get_user_agent ();
-g_print("UA=%s\n", user_agent);
 	webkit_settings_set_user_agent (settings, user_agent);
 	g_free (user_agent);
 
@@ -527,8 +528,6 @@ g_print("UA=%s\n", user_agent);
 		settings
 	);
 }
-
-static LifereaWebKit *liferea_webkit = NULL;
 
 /**
  * Create new WebkitWebView object and connect signals to a LifereaHtmlview
@@ -627,10 +626,16 @@ liferea_webkit_set_proxy (ProxyDetectMode mode, const gchar *host, guint port, c
 
 	switch (mode) {
 		case PROXY_DETECT_MODE_AUTO:
-			webkit_web_context_set_network_proxy_settings (webkit_web_context_get_default (), WEBKIT_NETWORK_PROXY_MODE_DEFAULT, NULL);
+			webkit_website_data_manager_set_network_proxy_settings
+			    (webkit_web_context_get_website_data_manager (webkit_web_context_get_default ()),
+			     WEBKIT_NETWORK_PROXY_MODE_DEFAULT,
+			     NULL);
 			break;
 		case PROXY_DETECT_MODE_NONE:
-			webkit_web_context_set_network_proxy_settings (webkit_web_context_get_default (), WEBKIT_NETWORK_PROXY_MODE_NO_PROXY, NULL);
+			webkit_website_data_manager_set_network_proxy_settings
+			    (webkit_web_context_get_website_data_manager (webkit_web_context_get_default ()),
+			     WEBKIT_NETWORK_PROXY_MODE_NO_PROXY,
+			     NULL);
 			break;
 		case PROXY_DETECT_MODE_MANUAL:
 			/* Construct user:password part of the URI if specified. */
@@ -663,14 +668,15 @@ liferea_webkit_set_proxy (ProxyDetectMode mode, const gchar *host, guint port, c
 			g_free (host_port);
 			proxy_settings = webkit_network_proxy_settings_new (proxy_uri, NULL);
 			g_free (proxy_uri);
-			webkit_web_context_set_network_proxy_settings (webkit_web_context_get_default (), WEBKIT_NETWORK_PROXY_MODE_CUSTOM, proxy_settings);
+			webkit_website_data_manager_set_network_proxy_settings
+			    (webkit_web_context_get_website_data_manager (webkit_web_context_get_default ()),
+			     WEBKIT_NETWORK_PROXY_MODE_CUSTOM,
+			     proxy_settings);
 			webkit_network_proxy_settings_free (proxy_settings);
 			break;
 	}
 #endif
 }
-
-static gchar *lastCss = NULL;
 
 /**
  * Load liferea.css via user style sheet
@@ -678,25 +684,34 @@ static gchar *lastCss = NULL;
 void
 liferea_webkit_reload_style (GtkWidget *webview)
 {
-	gchar *css = render_get_css ();
-
-	if (css == NULL || g_strcmp0 (css, lastCss) == 0)
-		return;
-
-	g_free (lastCss);
-	lastCss = css;
-
 	WebKitUserContentManager *manager = webkit_web_view_get_user_content_manager (WEBKIT_WEB_VIEW (webview));
 
 	webkit_user_content_manager_remove_all_style_sheets (manager);
 
-	WebKitUserStyleSheet *stylesheet = webkit_user_style_sheet_new (css,
+	if (default_stylesheet)
+		webkit_user_style_sheet_unref (default_stylesheet);
+
+	const gchar *css = render_get_default_css ();
+	// default stylesheet should only apply to HTML written to the view,
+	// not when browsing
+	const gchar *deny[] = { "http://*/*", "https://*/*",  NULL };
+	default_stylesheet = webkit_user_style_sheet_new (css,
+		WEBKIT_USER_CONTENT_INJECT_ALL_FRAMES,
+		WEBKIT_USER_STYLE_LEVEL_USER,
+		NULL,
+		deny);
+	webkit_user_content_manager_add_style_sheet (manager, default_stylesheet);
+
+	if (user_stylesheet)
+		webkit_user_style_sheet_unref (user_stylesheet);
+
+	css = render_get_user_css ();
+	user_stylesheet = webkit_user_style_sheet_new (css,
 		WEBKIT_USER_CONTENT_INJECT_ALL_FRAMES,
 		WEBKIT_USER_STYLE_LEVEL_USER,
 		NULL,
 		NULL);
-	webkit_user_content_manager_add_style_sheet (manager, stylesheet);
-	webkit_user_style_sheet_unref (stylesheet);
+	webkit_user_content_manager_add_style_sheet (manager, user_stylesheet);
 }
 
 /**

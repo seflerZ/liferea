@@ -1,7 +1,7 @@
 /*
  * @file node.c  hierarchic feed list node handling
  *
- * Copyright (C) 2003-2018 Lars Windolf <lars.windolf@gmx.de>
+ * Copyright (C) 2003-2022 Lars Windolf <lars.windolf@gmx.de>
  * Copyright (C) 2004-2006 Nathan J. Conrad <t98502@users.sourceforge.net>
  *
  * This program is free software; you can redistribute it and/or modify
@@ -33,6 +33,7 @@
 #include "itemset.h"
 #include "item_state.h"
 #include "metadata.h"
+#include "enclosure.h"
 #include "node.h"
 #include "node_view.h"
 #include "render.h"
@@ -42,6 +43,7 @@
 #include "date.h"
 #include "fl_sources/node_source.h"
 #include "ui/feed_list_view.h"
+#include "ui/icons.h"
 #include "ui/liferea_shell.h"
 
 static GHashTable *nodes = NULL;	/*<< node id -> node lookup table */
@@ -94,7 +96,6 @@ node_new (nodeTypePtr type)
 
 	node = g_new0 (struct node, 1);
 	node->type = type;
-	node->viewMode = NODE_VIEW_MODE_DEFAULT;
 	node->sortColumn = NODE_VIEW_SORT_BY_TIME;
 	node->sortReversed = TRUE;	/* default sorting is newest date at top */
 	node->available = TRUE;
@@ -431,7 +432,7 @@ gpointer
 node_get_icon (nodePtr node)
 {
 	if (!node->icon)
-		return (gpointer) NODE_TYPE(node)->icon;
+		return (gpointer) icon_get (NODE_TYPE(node)->icon);
 
 	return node->icon;
 }
@@ -474,45 +475,6 @@ node_set_sort_column (nodePtr node, nodeViewSortType sortColumn, gboolean revers
 	node->sortReversed = reversed;
 
 	return TRUE;
-}
-
-void
-node_set_view_mode (nodePtr node, nodeViewType viewMode)
-{
-	gint	defaultViewMode;
-
-	/* To allow users to select a default viewing mode for the layout
-	   we need to store only exceptions from this mode, which is why
-	   we compare the mode to be set with the default and if it's equal
-	   we just set NODE_VIEW_MODE_DEFAULT.
-
-	   This allows to not OPML export the viewMode attribute for nodes
-	   the are in default viewing mode, which then allows to follow
-	   a switch in the preference to a new default viewing mode.
-
-	   This of course also means that the we use some state on each
-	   changing of the view mode preference.
-        */
-
-	conf_get_int_value (DEFAULT_VIEW_MODE, &defaultViewMode);
-
-	if (viewMode != (nodeViewType)defaultViewMode)
-		node->viewMode = viewMode;
-	else
-		node->viewMode = NODE_VIEW_MODE_DEFAULT;
-}
-
-nodeViewType
-node_get_view_mode (nodePtr node)
-{
-	gint	defaultViewMode;
-
-	conf_get_int_value (DEFAULT_VIEW_MODE, &defaultViewMode);
-
-	if (NODE_VIEW_MODE_DEFAULT == node->viewMode)
-		return defaultViewMode;
-	else
-		return node->viewMode;
 }
 
 const gchar *
@@ -572,6 +534,29 @@ save_item_to_file_metadata_callback (const gchar *key, const gchar *value, guint
 	}
 	else if (g_strcmp0(key, "category") == 0) {
 		xmlTextWriterWriteElement (writer, BAD_CAST "category", BAD_CAST value);
+	}
+	else if (g_strcmp0(key, "enclosure") == 0) {
+		enclosurePtr encl = enclosure_from_string (value);
+		if (encl != NULL) {
+			/* There is no reason to save an enclosure with no URL. */
+			if (encl->url) {
+				xmlTextWriterStartElement(writer, BAD_CAST "enclosure");
+				xmlTextWriterWriteAttribute(writer, BAD_CAST "url", BAD_CAST encl->url);
+
+				/* Spec says both size and type are required but not all feeds respect this. */
+				if (encl->mime) {
+					xmlTextWriterWriteAttribute(writer, BAD_CAST "type", BAD_CAST encl->mime);
+				}
+				if (encl->size > 0) {
+					gchar buf[32];
+					g_snprintf(buf, sizeof(buf), "%ld", encl->size);
+					buf[sizeof(buf)-1] = '\0';
+					xmlTextWriterWriteAttribute(writer, BAD_CAST "length", BAD_CAST buf);
+				}
+				xmlTextWriterEndElement (writer);
+			}
+			enclosure_free (encl);
+		}
 	}
 }
 

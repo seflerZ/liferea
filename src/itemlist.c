@@ -1,7 +1,7 @@
 /*
  * @file itemlist.c  item list handling
  *
- * Copyright (C) 2004-2020 Lars Windolf <lars.windolf@gmx.de>
+ * Copyright (C) 2004-2023 Lars Windolf <lars.windolf@gmx.de>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -64,13 +64,18 @@ struct ItemListPrivate
 	nodePtr		currentNode;		/*<< the node whose own or its child items are currently displayed */
 	gulong		selectedId;		/*<< the currently selected (and displayed) item id */
 
-	nodeViewType	viewMode;		/*<< current viewing mode */
 	guint 		loading;		/*<< if >0 prevents selection effects when loading the item list */
 	itemPtr		invalidSelection;	/*<< if set then the next selection might need to do an unselect first */
 
 	gboolean 	deferredRemove;		/*<< TRUE if selected item needs to be removed from cache on unselecting */
-	gboolean 	deferredFilter;		/*<< TRUE if selected item needs to be filtered on unselecting */
 };
+
+enum {
+	ITEM_UPDATED,	/*<< state of a currently visible item has changed */
+	LAST_SIGNAL
+};
+
+static guint itemlist_signals[LAST_SIGNAL] = { 0 };
 
 static GObjectClass *parent_class = NULL;
 static ItemList *itemlist = NULL;
@@ -141,6 +146,18 @@ itemlist_class_init (ItemListClass *klass)
 	parent_class = g_type_class_peek_parent (klass);
 
 	object_class->finalize = itemlist_finalize;
+
+	itemlist_signals[ITEM_UPDATED] =
+		g_signal_new ("item-updated",
+		G_OBJECT_CLASS_TYPE (object_class),
+		(GSignalFlags)(G_SIGNAL_RUN_LAST | G_SIGNAL_ACTION),
+		0,
+		NULL,
+		NULL,
+		g_cclosure_marshal_VOID__STRING,
+		G_TYPE_NONE,
+		1,
+		G_TYPE_STRING);
 }
 
 /* member wrappers */
@@ -169,41 +186,6 @@ itemlist_get_displayed_node (void)
 	return itemlist->priv->currentNode;
 }
 
-/* called when unselecting the item or unloading the item list */
-static void
-itemlist_check_for_deferred_action (void)
-{
-	gulong	id = itemlist->priv->selectedId;
-	itemPtr	item;
-	gboolean  defer_remove;
-
-	if (id) {
-		itemlist_set_selected (NULL);
-                conf_get_bool_value (DEFER_DELETE_MODE, &defer_remove);
-
-		/* check for removals caused by itemlist filter rule */
-		if (itemlist->priv->deferredFilter) {
-			itemlist->priv->deferredFilter = FALSE;
-			item = item_load (id);
-                        item->isHidden = TRUE;
-                        if (defer_remove) {
-                                itemview_update_item (item);
-                        } else {
-                                itemview_remove_item (item);
-                        }
-			feed_list_view_update_node (item->nodeId);
-		}
-
-		/* check for removals caused by vfolder rules */
-		if (itemlist->priv->deferredRemove) {
-			itemlist->priv->deferredRemove = FALSE;
-			item = item_load (id);
-			itemlist_remove_item (item);
-		}
-	}
-}
-
-// FIXME: is this an itemset method?
 static gboolean
 itemlist_filter_check_item (itemPtr item)
 {
@@ -224,6 +206,40 @@ itemlist_filter_check_item (itemPtr item)
 
 	/* otherwise keep the item */
 	return TRUE;
+}
+
+/* called when unselecting the item or unloading the item list */
+static void
+itemlist_check_for_deferred_action (void)
+{
+	itemPtr item;
+
+	if (!itemlist_get_selected_id ())
+		return;
+
+	item = itemlist_get_selected ();
+	itemlist_set_selected (NULL);
+
+	/* check for item hiding caused by itemlist filter rule (i.e. folder hide read items) */
+	if (!itemlist_filter_check_item (item)) {
+		gboolean keep_for_search_folder;
+		conf_get_bool_value (DEFER_DELETE_MODE, &keep_for_search_folder);
+		if (keep_for_search_folder) {
+			item->isHidden = TRUE;
+			itemview_update_item (item);
+		} else {
+			itemview_remove_item (item);
+		}
+		feed_list_view_update_node (item->nodeId);
+	}
+
+	/* check for item unloading caused by search folder rules (i.e. unread items only) */
+	if (itemlist->priv->deferredRemove) {
+		itemlist->priv->deferredRemove = FALSE;
+		itemlist_remove_item (item);
+	} else {
+		item_unload (item);
+	}
 }
 
 static void
@@ -292,7 +308,7 @@ itemlist_load (nodePtr node)
 {
 	itemSetPtr	itemSet;
 	gint		folder_display_mode;
-	gboolean	folder_display_hide_read;
+	gboolean	display_hide_read = FALSE;
 
 	debug_enter ("itemlist_load");
 
@@ -307,27 +323,26 @@ itemlist_load (nodePtr node)
 	   no folder viewing is configured. If folder viewing is enabled
 	   set up a "unread items only" rule depending on the prefences. */
 
-	/* for folders and other heirarchic nodes do filtering */
+	/* for folders and other hierarchic nodes do preference based filtering */
 	if (IS_FOLDER (node) || node->children) {
-		liferea_shell_update_allitems_actions (FALSE, 0 != node->unreadCount);
-
 		conf_get_int_value (FOLDER_DISPLAY_MODE, &folder_display_mode);
 		if (!folder_display_mode)
 			return;
 
-		conf_get_bool_value (FOLDER_DISPLAY_HIDE_READ, &folder_display_hide_read);
-		if (folder_display_hide_read) {
-			itemlist->priv->filter = g_new0(struct itemSet, 1);
-			itemlist->priv->filter->anyMatch = TRUE;
-			itemset_add_rule (itemlist->priv->filter, "unread", "", TRUE);
-		}
-	} else {
-		liferea_shell_update_allitems_actions (0 != node->itemCount, 0 != node->unreadCount);
+		conf_get_bool_value (FOLDER_DISPLAY_HIDE_READ, &display_hide_read);
+	}
+
+	/* for search folders do properties based filtering */
+	if (IS_VFOLDER (node))
+		display_hide_read = ((vfolderPtr)node)->unreadOnly;
+
+	if (display_hide_read) {
+		itemlist->priv->filter = g_new0(struct itemSet, 1);
+		itemlist->priv->filter->anyMatch = TRUE;
+		itemset_add_rule (itemlist->priv->filter, "unread", "", TRUE);
 	}
 
 	itemlist->priv->loading++;
-	itemlist->priv->viewMode = node_get_view_mode (node);
-	itemview_set_layout (itemlist->priv->viewMode);
 
 	/* Set the new displayed node... */
 	itemlist->priv->currentNode = node;
@@ -346,20 +361,13 @@ itemlist_load (nodePtr node)
 }
 
 void
-itemlist_unload (gboolean markRead)
+itemlist_unload (void)
 {
 	/* Always clear to ensure clearing on search */
 	itemview_clear ();
 
 	if (itemlist->priv->currentNode) {
 		itemview_set_displayed_node (NULL);
-
-		/* 1. Postprocessing for previously selected node, this is necessary
-		   to realize reliable read marking when using condensed mode. It's
-		   important to do this only when the selection really changed. */
-		if (markRead && (2 == node_get_view_mode (itemlist->priv->currentNode)))
-			feedlist_mark_all_read (itemlist->priv->currentNode);
-
 		itemlist_check_for_deferred_action ();
 	}
 
@@ -376,14 +384,6 @@ itemlist_select_next_unread (void)
 {
 	itemPtr	result = NULL;
 
-	/* If we are in combined mode we have to mark everything
-	   read or else we would never jump to the next feed,
-	   because no item will be selected and marked read... */
-	if (itemlist->priv->currentNode) {
-		if (NODE_VIEW_MODE_COMBINED == node_get_view_mode (itemlist->priv->currentNode))
-			node_mark_all_read (itemlist->priv->currentNode);
-	}
-
 	itemlist->priv->loading++;	/* prevent unwanted selections */
 
 	/* before scanning the feed list, we test if there is a unread
@@ -399,9 +399,7 @@ itemlist_select_next_unread (void)
 		if (node) {
 			/* load found feed */
 			feed_list_view_select (node);
-
-			if (NODE_VIEW_MODE_COMBINED != node_get_view_mode (node))
-				result = itemview_find_unread_item (0);	/* find first unread item */
+			result = itemview_find_unread_item (0);	/* find first unread item */
 		} else {
 			/* if we don't find a feed with unread items do nothing */
 			liferea_shell_set_status_bar (_("There are no unread items"));
@@ -420,14 +418,13 @@ void
 itemlist_toggle_flag (itemPtr item)
 {
 	item_set_flag_state (item, !(item->flagStatus));
-	/* No itemview_update() to avoid disturbing HTML scroll state and media content */
 }
 
 void
 itemlist_toggle_read_status (itemPtr item)
 {
 	item_set_read_state (item, !(item->readStatus));
-	/* No itemview_update() to avoid disturbing HTML scroll state and media content */
+	g_signal_emit_by_name (itemlist, "item-updated", item->nodeId);
 }
 
 /* function to remove items due to item list filtering */
@@ -440,18 +437,16 @@ itemlist_hide_item (itemPtr item)
 		itemview_remove_item (item);
 		feed_list_view_update_node (item->nodeId);
 	} else {
-		itemlist->priv->deferredFilter = TRUE;
 		/* update the item to show new state that forces
 		   later removal */
 		itemview_update_item (item);
 	}
 }
 
-/* function to cancel deferred removal of selected item */
+/* function to cancel deferred filtering of selected item */
 static void
 itemlist_unhide_item (itemPtr item)
 {
-	itemlist->priv->deferredFilter = FALSE;
         item->isHidden = FALSE;
 }
 
@@ -463,7 +458,6 @@ itemlist_remove_item (itemPtr item)
 {
 	if (itemlist->priv->selectedId == item->id) {
 		itemlist_set_selected (NULL);
-		itemlist->priv->deferredFilter = FALSE;
 		itemlist->priv->deferredRemove = FALSE;
 	}
 
@@ -479,6 +473,7 @@ itemlist_remove_item (itemPtr item)
 	node_update_counters (node_from_id (item->nodeId));
 
 	item_unload (item);
+	g_signal_emit_by_name (itemlist, "item-updated", item->nodeId);
 }
 
 /* soft possibly delayed item remove */
@@ -504,22 +499,21 @@ itemlist_remove_items (itemSetPtr itemSet, GList *items)
 
 	while (iter) {
 		itemPtr item = (itemPtr) iter->data;
-
 		if (itemlist->priv->selectedId != item->id) {
-			/* don't call itemlist_remove_item() here, because it's to slow */
-			itemview_remove_item (item);
-			db_item_remove (item->id);
+			itemview_remove_item(item);
+			db_item_remove(item->id);
 		} else {
-			/* go the normal and selection-safe way to avoid disturbing the user */
-			itemlist_request_remove_item (item);
+			itemlist_request_remove_item(item);
 		}
-		item_unload (item);
+		g_object_unref (item);
+
 		iter = g_list_next (iter);
 	}
 
 	itemview_update ();
 	vfolder_foreach (node_update_counters);
 	node_update_counters (node_from_id (itemSet->nodeId));
+	g_signal_emit_by_name (itemlist, "item-updated", itemSet->nodeId);
 }
 
 void
@@ -537,6 +531,7 @@ itemlist_remove_all_items (nodePtr node)
 
 	vfolder_foreach (node_update_counters);
 	node_update_counters (node);
+	g_signal_emit_by_name (itemlist, "item-updated", node->id);
 }
 
 void
@@ -593,94 +588,10 @@ itemlist_selection_changed (itemPtr item)
 	}
 
 	if (item)
-		item_unload (item);
+		g_object_unref (item);
 
 	debug_end_measurement (DEBUG_GUI, "itemlist selection");
 	debug_exit ("itemlist_selection_changed");
-}
-
-/* viewing mode callbacks */
-
-guint
-itemlist_get_view_mode (void)
-{
-	return itemlist->priv->viewMode;
-}
-
-static void
-itemlist_set_view_mode (nodeViewType newMode)
-{
-	nodePtr		node;
-	itemPtr		item;
-
-	itemlist->priv->viewMode = newMode;
-
-	node = itemlist_get_displayed_node ();
-	item = itemlist_get_selected ();
-
-	if (node) {
-		itemlist_unload (FALSE);
-
-		node_set_view_mode (node, itemlist->priv->viewMode);
-		itemview_set_layout (itemlist->priv->viewMode);
-		itemlist_load (node);
-
-		/* If there was an item selected, select it again since
-		 * itemlist_unload() unselects it.
-		 */
-		if (item && itemlist->priv->viewMode != NODE_VIEW_MODE_COMBINED)
-			itemview_select_item (item);
-	}
-
-	if (item)
-		item_unload (item);
-}
-
-void
-on_view_activate (GSimpleAction *action, GVariant *value, gpointer user_data)
-{
-	const gchar *s_val = g_variant_get_string (value, NULL);
-	GVariant *cur_state = g_action_get_state (G_ACTION(action));
-	const gchar *s_cur_state = g_variant_get_string (cur_state,NULL);
-	/* If requested state is the same as current state, leave without doing
-	 * anything. */
-	if (!g_strcmp0 (s_val,s_cur_state)) {
-		g_variant_unref (cur_state);
-		return;
-	}
-	g_variant_unref (cur_state);
-
-	nodeViewType val = 0;
-	if (!g_strcmp0 ("normal",s_val))
-	{
-		val = NODE_VIEW_MODE_NORMAL;
-	}
-	if (!g_strcmp0 ("wide",s_val))
-	{
-		val = NODE_VIEW_MODE_WIDE;
-	}
-	if (!g_strcmp0 ("combined",s_val))
-	{
-		/* Combined is removed : default to normal */
-		val = NODE_VIEW_MODE_NORMAL;
-	}
-	itemlist_set_view_mode (val);
-
-	/* Getting the actual value to reflect current state even if for some
-	 * reason, other functions couldn't make the requested change.
-	 * May be overkill. */
-	val = itemlist_get_view_mode ();
-	switch (val)
-	{
-	  case NODE_VIEW_MODE_NORMAL:
-	  case NODE_VIEW_MODE_DEFAULT:
-	  case NODE_VIEW_MODE_COMBINED:
-		g_simple_action_set_state (action, g_variant_new_string("normal"));
-		break;
-	  case NODE_VIEW_MODE_WIDE:
-		g_simple_action_set_state (action, g_variant_new_string("wide"));
-		break;
-	}
 }
 
 static void
@@ -703,9 +614,6 @@ itemlist_select_from_history (gboolean back)
 
 	if (node != feedlist_get_selected ())
 		feed_list_view_select (node);
-
-	if (NODE_VIEW_MODE_COMBINED == itemlist_get_view_mode ())
-		itemlist_set_view_mode (NODE_VIEW_MODE_NORMAL);
 
 	itemview_select_item (item);
 	item_unload (item);
@@ -760,16 +668,7 @@ itemlist_add_loader (ItemLoader *loader)
 void
 itemlist_add_search_result (ItemLoader *loader)
 {
-	nodeViewType viewMode;
-
-	/* Ensure that we are in a useful viewing mode (3 paned) */
-	itemlist_unload (FALSE);
-
-	viewMode = itemlist_get_view_mode ();
-	if ((NODE_VIEW_MODE_NORMAL != viewMode) &&
-	    (NODE_VIEW_MODE_WIDE != viewMode))
-		itemview_set_layout (NODE_VIEW_MODE_NORMAL);
-
+	itemlist_unload ();
 	itemview_set_mode (ITEMVIEW_SINGLE_ITEM);
 
 	/* Set current node to search result dummy node so that

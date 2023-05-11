@@ -320,6 +320,8 @@ liferea_browser_new (gboolean forceInternalBrowsing)
 	debug0 (DEBUG_NET, "Setting initial HTML widget proxy...");
 	liferea_browser_proxy_changed (network_monitor_get (), browser);
 
+	liferea_browser_update_stylesheet (browser);
+
 	return browser;
 }
 
@@ -497,7 +499,8 @@ liferea_browser_load_reader_content_cb (const struct updateResult * const result
 	}
 		
 	liferea_webkit_run_js (browser->renderWidget,
-	                       g_strdup_printf ("loadContent(true, '<body>%s</body>');\n",
+	                       g_strdup_printf ("setBase('%s');loadContent(true, '<body>%s</body>');\n",
+	                                        result->source,
 	                                        browser->content),
 	                       liferea_browser_load_finished_cb);
 }
@@ -546,7 +549,7 @@ liferea_browser_handle_URL (LifereaBrowser *browser, const gchar *url)
 
 	conf_get_bool_value (BROWSE_INSIDE_APPLICATION, &browse_inside_application);
 
-	debug2 (DEBUG_GUI, "handle URL: %s %s %s",
+	debug2 (DEBUG_GUI, "handle URL: %s %s",
 	        browse_inside_application?"true":"false",
 	        browser->forceInternalBrowsing?"true":"false");
 

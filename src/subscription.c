@@ -200,7 +200,7 @@ subscription_process_update_result (const struct updateResult * const result, gp
 			auth_dialog_new (subscription, flags);
 		}
 		if (410 == result->httpstatus) { /* gone */
-			subscription->discontinued = TRUE;
+			subscription_set_discontinued (subscription, TRUE);
 			statusbar = g_strdup_printf (_("\"%s\" is discontinued. Liferea won't updated it anymore!"), node_get_title (node));
 		}
 	} else if (304 == result->httpstatus) {
@@ -282,6 +282,7 @@ subscription_update (subscriptionPtr subscription, guint flags)
 			subscription->updateState,
 			subscription->updateOptions
 		);
+		update_request_allow_commands (request, TRUE);
 
 		if (subscription_get_filter (subscription))
 			request->filtercmd = g_strdup (subscription_get_filter (subscription));
@@ -363,6 +364,12 @@ void
 subscription_set_default_update_interval (subscriptionPtr subscription, guint interval)
 {
 	subscription->defaultInterval = interval;
+}
+
+void
+subscription_set_discontinued (subscriptionPtr subscription, gboolean newState)
+{
+	subscription->discontinued = newState;
 }
 
 static const gchar *
@@ -563,10 +570,6 @@ subscription_to_xml (subscriptionPtr subscription, xmlNodePtr xml)
 
 	tmp = g_strdup_printf ("%d", subscription_get_default_update_interval (subscription));
 	xmlNewTextChild (xml, NULL, BAD_CAST "feedUpdateInterval", (xmlChar *)tmp);
-	g_free (tmp);
-
-	tmp = g_strdup_printf ("%d", subscription->discontinued?1:0);
-	xmlNewTextChild (xml, NULL, BAD_CAST "feedDiscontinued", (xmlChar *)tmp);
 	g_free (tmp);
 
 	if (subscription->updateError)

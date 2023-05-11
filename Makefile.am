@@ -40,6 +40,9 @@ dtd_DATA = dtd/html.ent
 
 plugindir = $(pkglibdir)/plugins
 plugin_DATA = \
+	plugins/add-bookmark-site.py \
+	plugins/add-bookmark-site.plugin \
+	plugins/add-bookmark-site.ui \
 	plugins/bold-unread.py \
 	plugins/bold-unread.plugin \
 	plugins/getfocus.py \
@@ -52,8 +55,6 @@ plugin_DATA = \
 	plugins/libnotify.plugin \
 	plugins/media-player.py \
 	plugins/media-player.plugin \
-	plugins/pane.py \
-	plugins/pane.plugin \
 	plugins/plugin-installer.py \
 	plugins/plugin-installer.plugin \
 	plugins/trayicon.py \
@@ -93,3 +94,6 @@ CLEANFILES = \
 
 po/liferea.pot:
 	cd po && $(MAKE) liferea.pot
+
+test:
+	cd src/tests && make test

@@ -338,10 +338,6 @@ feed_process_update_result (subscriptionPtr subscription, const struct updateRes
 		/* restore user defined properties if necessary */
 		if ((flags & FEED_REQ_RESET_TITLE) && ctxt->title)
 			node_set_title (node, ctxt->title);
-
-		// FIXME: this duplicates the db_subscription_update() in subscription.c
-		if (flags > 0)
-			db_subscription_update (subscription);
 	}
 
 	feed_parser_ctxt_free (ctxt);
@@ -464,7 +460,7 @@ feed_get_node_type (void)
 		NODE_CAPABILITY_EXPORT |
 		NODE_CAPABILITY_EXPORT_ITEMS,
 		"feed",		/* not used, feed format ids are used instead */
-		NULL,
+		ICON_DEFAULT,
 		feed_import,
 		feed_export,
 		feed_load,
@@ -476,7 +472,6 @@ feed_get_node_type (void)
 		feed_properties,
 		feed_free
 	};
-	nti.icon = icon_get (ICON_DEFAULT);
 
 	return &nti;
 }

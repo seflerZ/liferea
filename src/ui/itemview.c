@@ -1,7 +1,7 @@
 /*
  * @file itemview.c  viewing feed content in different presentation modes
  *
- * Copyright (C) 2006-2021 Lars Windolf <lars.windolf@gmx.de>
+ * Copyright (C) 2006-2022 Lars Windolf <lars.windolf@gmx.de>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -46,16 +46,15 @@
 struct _ItemView {
 	GObject	parent_instance;
 
-	gboolean	htmlOnly;		/*<< TRUE if HTML only mode */
 	guint		mode;			/*<< current item view mode */
 	nodePtr		node;			/*<< the node whose items are displayed */
 	gboolean	browsing;		/*<< TRUE if itemview is used as internal browser right now */
 	gboolean	needsHTMLViewUpdate;	/*<< flag to be set when HTML rendering is to be
 						     updated, used to delay HTML updates */
-	gboolean	hasEnclosures;		/*<< TRUE if at least one item of the current itemset has an enclosure */
 
 	nodeViewType	viewMode;		/*<< current viewing mode */
-	guint		currentLayoutMode;	/*<< layout mode (3 pane, 2 pane, wide view) */
+	gboolean	autoLayout;		/*<< TRUE if automatic layout switching is active */
+	guint		currentLayoutMode;	/*<< effective layout mode (email or wide) */
 
 	ItemListView	*itemListView;		/*<< widget instance used to present items in list mode */
 
@@ -146,7 +145,6 @@ itemview_clear (void)
 	if (itemview->itemListView)
 		item_list_view_clear (itemview->itemListView);
 	enclosure_list_view_hide (itemview->enclosureView);
-	itemview->hasEnclosures = FALSE;
 	itemview->needsHTMLViewUpdate = TRUE;
 	itemview->browsing = FALSE;
 }
@@ -176,8 +174,6 @@ itemview_set_displayed_node (nodePtr node)
 void
 itemview_add_item (itemPtr item)
 {
-	itemview->hasEnclosures |= item->hasEnclosure;
-
 	if (itemview->itemListView)
 		/* add item in 3 pane mode */
 		item_list_view_add_item (itemview->itemListView, item);
@@ -289,7 +285,7 @@ void
 itemview_update (void)
 {
 	if (itemview->itemListView)
-		item_list_view_update (itemview->itemListView, itemview->hasEnclosures);
+		item_list_view_update (itemview->itemListView);
 
 	if (itemview->itemListView && itemview->node) {
 		item_list_view_enable_favicon_column (itemview->itemListView, NODE_TYPE (itemview->node)->capabilities & NODE_CAPABILITY_SHOW_ITEM_FAVICONS);
@@ -300,9 +296,6 @@ itemview_update (void)
 		itemview->needsHTMLViewUpdate = FALSE;
 		liferea_browser_update (itemview->htmlview, itemview->mode);
 	}
-
-	if (itemview->node)
-		liferea_shell_update_allitems_actions (0 != itemview->node->itemCount, (0 != itemview->node->unreadCount) || IS_VFOLDER (itemview->node));
 }
 
 /* next unread selection logic */
@@ -361,7 +354,6 @@ itemview_init (ItemView *iv)
 {
 	debug_enter("itemview_init");
 
-	/* 0. Prepare globally accessible singleton */
 	g_assert (NULL == itemview);
 	itemview = iv;
 
@@ -380,29 +372,40 @@ itemview_set_layout (nodeViewType newMode)
 {
 	GtkWidget 	*previous_parent = NULL;
 	const gchar	*htmlWidgetName, *ilWidgetName, *encViewVBoxName;
+	nodePtr		node;
+	itemPtr		item;
+	nodeViewType	effectiveMode = newMode;
 
-	if (newMode == itemview->currentLayoutMode)
-		return;
-	itemview->currentLayoutMode = newMode;
+	if (NODE_VIEW_MODE_AUTO == newMode) {
+		gint	w, h, f;
 
-	if (!itemview->htmlview) {
-		debug0 (DEBUG_GUI, "Creating HTML widget");
-		itemview->htmlview = liferea_browser_new (FALSE);
-		g_signal_connect (itemview->htmlview, "statusbar-changed",
-		                  G_CALLBACK (on_important_status_message), NULL);
+		f = gtk_widget_get_allocated_width (liferea_shell_lookup ("feedlist"));
+		gtk_window_get_size (GTK_WINDOW (liferea_shell_get_window ()), &w, &h);
 
-		/* Set initial zoom */
-		liferea_browser_set_zoom (itemview->htmlview, itemview->zoom/100.);
-	} else {
-		liferea_browser_clear (itemview->htmlview);
+		/* we switch layout if window width - feed list width > window heigt */
+		effectiveMode = (w - f > h)?NODE_VIEW_MODE_WIDE:NODE_VIEW_MODE_NORMAL;
 	}
 
-	debug1 (DEBUG_GUI, "Setting item list layout mode: %d", newMode);
+	if (effectiveMode == itemview->currentLayoutMode)
+		return;
 
-	switch (newMode) {
-		case NODE_VIEW_MODE_COMBINED:
-			// Not supported anymore, fall through to NORMAL
+	itemview->autoLayout = (NODE_VIEW_MODE_AUTO == newMode);
+	itemview->currentLayoutMode = effectiveMode;
 
+	node = itemlist_get_displayed_node ();
+	item = itemlist_get_selected ();
+
+	/* Drop items */
+	if (node)
+		itemlist_unload ();
+
+	/* Prepare widgets for layout */
+	g_assert (itemview->htmlview);
+	liferea_browser_clear (itemview->htmlview);
+
+	debug2 (DEBUG_GUI, "Setting item list layout mode: %d (auto=%d)", effectiveMode, itemview->autoLayout);
+
+	switch (effectiveMode) {
 		case NODE_VIEW_MODE_NORMAL:
 			htmlWidgetName = "normalViewHtml";
 			ilWidgetName = "normalViewItems";
@@ -421,7 +424,7 @@ itemview_set_layout (nodeViewType newMode)
 
 	/* Reparenting HTML view. This avoids the overhead of new browser instances. */
 	g_assert (htmlWidgetName);
-	gtk_notebook_set_current_page (GTK_NOTEBOOK (liferea_shell_lookup ("itemtabs")), newMode);
+	gtk_notebook_set_current_page (GTK_NOTEBOOK (liferea_shell_lookup ("itemtabs")), effectiveMode);
 	previous_parent = gtk_widget_get_parent (liferea_browser_get_widget (itemview->htmlview));
 	if (previous_parent)
 		gtk_container_remove (GTK_CONTAINER (previous_parent), liferea_browser_get_widget (itemview->htmlview));
@@ -436,7 +439,7 @@ itemview_set_layout (nodeViewType newMode)
 	}
 
 	if (ilWidgetName) {
-		itemview->itemListView = item_list_view_create (newMode == NODE_VIEW_MODE_WIDE);
+		itemview->itemListView = item_list_view_create (effectiveMode == NODE_VIEW_MODE_WIDE);
 		gtk_container_add (GTK_CONTAINER (liferea_shell_lookup (ilWidgetName)), item_list_view_get_widget (itemview->itemListView));
 	}
 
@@ -454,6 +457,29 @@ itemview_set_layout (nodeViewType newMode)
 				  NULL, GTK_POS_BOTTOM, 1,1);
 		gtk_widget_show_all (liferea_shell_lookup (encViewVBoxName));
 	}
+
+	/* Load previously selected node and/or item into new widgets */
+	if (node) {
+		itemlist_load (node);
+
+		/* If there was an item selected, select it again since
+		 * itemlist_unload() unselects it.
+		 */
+		if (item)
+			itemview_select_item (item);
+	}
+
+	if (item)
+		item_unload (item);
+}
+
+guint
+itemview_get_layout (void)
+{
+	if (itemview->autoLayout)
+		return NODE_VIEW_MODE_AUTO;
+
+	return itemview->currentLayoutMode;
 }
 
 ItemView *
@@ -470,9 +496,15 @@ itemview_create (GtkWidget *window)
 		conf_set_int_value (LAST_ZOOMLEVEL, zoom);
 	}
 	itemview->zoom = zoom;
+	itemview->currentLayoutMode = 1000;	// something invalid
 
-	/* 2. Set initial layout (because no node selected yet) */
-	itemview_set_layout (NODE_VIEW_MODE_WIDE);
+	debug0 (DEBUG_GUI, "Creating HTML widget");
+	itemview->htmlview = liferea_browser_new (FALSE);
+	g_signal_connect (itemview->htmlview, "statusbar-changed",
+	                  G_CALLBACK (on_important_status_message), NULL);
+
+	/* Set initial zoom */
+	liferea_browser_set_zoom (itemview->htmlview, itemview->zoom/100.);
 
 	return itemview;
 }
@@ -494,14 +526,13 @@ itemview_launch_URL (const gchar *url, gboolean forceInternal)
 void
 itemview_do_zoom (gint zoom)
 {
-	if (itemview->htmlview == NULL)
-		return;
-
-	liferea_browser_do_zoom (itemview->htmlview, zoom);
+	if (itemview->htmlview)
+		liferea_browser_do_zoom (itemview->htmlview, zoom);
 }
 
 void
 itemview_style_update (void)
 {
-	liferea_browser_update_stylesheet (itemview->htmlview);
+	if (itemview->htmlview)
+		liferea_browser_update_stylesheet (itemview->htmlview);
 }
